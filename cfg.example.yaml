@@ -2,5 +2,5 @@ addr: :8080
 auth:
   host: smtp.example.com
   port: 465
-  username: test@exaple.com
+  username: test@example.com
   password: test
