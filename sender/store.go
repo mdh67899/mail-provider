@@ -1,29 +1,33 @@
 package sender
 
 import (
+	"github.com/mdh67899/go-utils/cron"
 	List "github.com/mdh67899/go-utils/list"
 	"github.com/mdh67899/mail-provider/model"
+	"time"
 )
 
-type safeLinklist struct {
+type Store struct {
 	SafeLinklist *List.Linklist
+	Cron         *cron.CronScheduler
 }
 
-func NewsafeLinklist() *safeLinklist {
-	return &safeLinklist{SafeLinklist: List.NewLinklist()}
+func NewStore() *Store {
+	return &Store{
+		SafeLinklist: List.NewLinklist(),
+		Cron:         cron.NewCronScheduler(time.Second * 3),
+	}
 }
 
-var Queue = NewsafeLinklist()
-
-func (this *safeLinklist) SafePush(v interface{}) {
+func (this *Store) SafePush(v interface{}) {
 	this.SafeLinklist.PushFront(v)
 }
 
-func (this *safeLinklist) Len() int {
+func (this *Store) Len() int {
 	return this.SafeLinklist.Len()
 }
 
-func (this *safeLinklist) PopBackByNum(num int) []*model.Mail {
+func (this *Store) PopBackByNum(num int) []*model.Mail {
 	mails := this.SafeLinklist.BatchPopBack(num)
 	length := len(mails)
 
@@ -39,7 +43,7 @@ func (this *safeLinklist) PopBackByNum(num int) []*model.Mail {
 	return mail
 }
 
-func (this *safeLinklist) PopBack() *model.Mail {
+func (this *Store) PopBack() *model.Mail {
 	item := this.SafeLinklist.PopFront()
 	return item.(*model.Mail)
 }

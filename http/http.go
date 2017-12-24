@@ -7,60 +7,64 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/mdh67899/go-utils/cron"
 	"github.com/mdh67899/mail-provider/model"
 	"github.com/mdh67899/mail-provider/sender"
+	"sync"
 )
 
-type httpServer struct {
-	srv       *http.Server
-	exit      chan bool
-	exit_done chan bool
+type HttpServer struct {
+	sync.RWMutex
+	srv   *http.Server
+	queue *sender.Store
+	job   *cron.JobScheduler
 }
 
-func NewhttpServer() *httpServer {
-	return &httpServer{srv: nil, exit: make(chan bool, 1), exit_done: make(chan bool, 1)}
+func NewhttpServer() *HttpServer {
+	return &HttpServer{srv: nil, queue: nil, job: cron.NewJobScheduler()}
 }
 
-var HttpServer = NewhttpServer()
-
-func mail(c *gin.Context) {
-	mail := &model.Mail{}
-	err := c.ShouldBind(mail)
+func (this *HttpServer) mail(c *gin.Context) {
+	msg := &model.Mail{}
+	err := c.ShouldBind(msg)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 	}
 
-	if mail.Tos == "" || mail.Subject == "" || mail.Content == "" {
-		c.JSON(http.StatusOK, gin.H{"status": "tos,subject,content is empty,please check", "message": mail.String()})
+	if msg.Tos == "" || msg.Subject == "" || msg.Content == "" {
+		c.JSON(http.StatusOK, gin.H{"status": "tos,subject,content is empty,please check", "message": msg.String()})
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": mail.String()})
+	this.queue.SafePush(msg)
 
-	sender.Queue.SafePush(mail)
+	c.JSON(http.StatusOK, gin.H{"message": msg.String()})
 }
 
-func (this *httpServer) Init(addr string) {
+func (this *HttpServer) Init(cfg *model.Config, queue *sender.Store) {
+	this.queue = queue
+
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.Default()
 
 	router.GET("/", func(c *gin.Context) {
-		time.Sleep(1 * time.Second)
 		c.String(http.StatusOK, "Welcome Gin Server")
 	})
 
-	router.POST("/mail", mail)
+	router.POST("/mail", this.mail)
 
-	if addr == "" {
-		log.Fatalln("[error] http listen address is: ", addr)
+	if cfg.Addr == "" {
+		log.Fatalln("[error] http listen address is: ", cfg.Addr)
 	}
 
 	this.srv = &http.Server{
-		Addr:    addr,
+		Addr:    cfg.Addr,
 		Handler: router,
 	}
 }
 
-func (this *httpServer) Start() {
+func (this *HttpServer) start() {
+	this.RLock()
+	defer this.RUnlock()
 
 	go func() {
 		// service connections
@@ -71,7 +75,7 @@ func (this *httpServer) Start() {
 
 	// Wait for interrupt signal to gracefully shutdown the server with
 	// a timeout of 3 seconds.
-	<-this.exit
+	<-this.job.Quit
 	log.Println("Shutdown Server ...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -81,13 +85,26 @@ func (this *httpServer) Start() {
 	}
 	log.Println("Server exiting")
 
-	this.exit_done <- true
+	this.job.Quit_Done <- struct{}{}
 }
 
-func (this *httpServer) Exit() {
+func (this *HttpServer) StartServer() {
+	go this.start()
+	log.Println("Server Start succeessfull.")
+}
+
+func (this *HttpServer) StopServer() {
+	this.stop()
+}
+
+
+func (this *HttpServer) stop() {
+	this.RLock()
+	defer this.RUnlock()
+
 	if this.srv != nil {
-		this.exit <- true
-		<-this.exit_done
+		this.job.Quit <- struct{}{}
+		<-this.job.Quit_Done
 		this.srv = nil
 	}
 }

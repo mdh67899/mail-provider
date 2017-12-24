@@ -8,6 +8,7 @@ import (
 	"github.com/mdh67899/go-utils/cron"
 	"github.com/mdh67899/mail-provider/model"
 	"gopkg.in/gomail.v2"
+	"sync"
 )
 
 func NewAuthUser(host string, port int, username string, password string) *model.AuthUser {
@@ -20,28 +21,34 @@ func NewAuthUser(host string, port int, username string, password string) *model
 }
 
 type MailSender struct {
+	sync.RWMutex
+
 	Cfg       *model.AuthUser
 	Dialer    *gomail.Dialer
 	S         gomail.SendCloser
-	Ready     bool
 	Msg       chan *gomail.Message
 	Scheduler *cron.JobScheduler
+	Ready     bool
 }
 
-func InitMailSender(cfg model.AuthUser) {
-	if !cfg.Islegal() {
-		log.Fatalln("[ERROR] authenticate user is not legal:", cfg.String())
+func InitMailSender(cfg *model.Config) *MailSender {
+	if !cfg.Auth.Islegal() {
+		log.Fatalln("[ERROR] authenticate user is not legal:", cfg.Auth.String())
 	}
 
-	Mailer = &MailSender{
-		Cfg:       &cfg,
-		Dialer:    gomail.NewDialer(cfg.Host, cfg.Port, cfg.UserName, cfg.PassWord),
+	Mailer := &MailSender{
+		Cfg:       &cfg.Auth,
+		Dialer:    gomail.NewDialer(cfg.Auth.Host, cfg.Auth.Port, cfg.Auth.UserName, cfg.Auth.PassWord),
+		S:         nil,
 		Msg:       make(chan *gomail.Message),
 		Scheduler: cron.NewJobScheduler(),
+		Ready:     false,
 	}
+
+	return Mailer
 }
 
-func (this *MailSender) Open() {
+func (this *MailSender) open() {
 	var err error
 	if this.Ready {
 		return
@@ -55,13 +62,12 @@ func (this *MailSender) Open() {
 	this.Ready = true
 }
 
-func (this *MailSender) Close() {
+func (this *MailSender) close() {
 	if !this.Ready {
 		return
 	}
 
 	if err := this.S.Close(); err != nil {
-		this.Ready = false
 		log.Println("[ERROR] Close dialer smtp server connnection failed:", err)
 		return
 	}
@@ -70,12 +76,15 @@ func (this *MailSender) Close() {
 }
 
 func (this *MailSender) Send(m *gomail.Message) error {
+	this.Lock()
+	defer this.Unlock()
+
 	for i := 0; i < 3; i++ {
 		if this.Ready {
 			break
 		}
 
-		this.Open()
+		this.open()
 
 		time.Sleep(time.Millisecond * 100)
 	}
@@ -85,26 +94,21 @@ func (this *MailSender) Send(m *gomail.Message) error {
 	}
 
 	if err := gomail.Send(this.S, m); err != nil {
-		this.Close()
+		this.close()
 		return err
 	}
 
 	return nil
 }
 
-var (
-	Mailer *MailSender
-)
-
-func StartCron() {
-	go Mailer.Process()
+func (this *MailSender) StartCron() {
+	go this.Process()
 	log.Println("Worker start successfull...")
 }
 
-func StopCron() {
-	Mailer.Scheduler.Quit <- struct{}{}
-	<-Mailer.Scheduler.Quit_Done
-	Mailer.Scheduler.Destory()
+func (this *MailSender) StopCron() {
+	this.Scheduler.Quit <- struct{}{}
+	<-this.Scheduler.Quit_Done
 
 	log.Println("Worker stop successfull...")
 }
@@ -128,10 +132,10 @@ func (this *MailSender) Process() {
 		// Close the connection to the SMTP server if no email was sent in
 		// the last 30 seconds.
 		case <-time.After(30 * time.Second):
-			this.Close()
+			this.close()
 
 		case <-this.Scheduler.Quit:
-			this.Close()
+			this.close()
 			this.Scheduler.Quit_Done <- struct{}{}
 			return
 		}

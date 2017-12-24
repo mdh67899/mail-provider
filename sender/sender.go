@@ -2,59 +2,59 @@ package sender
 
 import (
 	"log"
-	"time"
 
-	"github.com/mdh67899/go-utils/cron"
-	"github.com/mdh67899/mail-provider/config"
 	"github.com/mdh67899/mail-provider/mail"
+	"github.com/mdh67899/mail-provider/model"
 	"gopkg.in/gomail.v2"
 )
 
-var QueueCron = cron.NewCronScheduler(time.Second * 3)
+func (this *Store) flush(cfg *model.Config, mailer *mail.MailSender) {
+	size := this.Len()
+	if size == 0 {
+		return
+	}
 
-func Job(Queue *safeLinklist, cron *cron.CronScheduler, mailer *mail.MailSender) {
+	for i := 0; i < size; i++ {
+		item := this.PopBack()
+
+		if item == nil {
+			continue
+		}
+
+		m := gomail.NewMessage()
+		m.SetHeader("From", cfg.Auth.UserName)
+		m.SetHeader("To", item.Tos)
+		m.SetHeader("Subject", item.Subject)
+		m.SetBody("text/plain", item.Content)
+
+		mailer.Msg <- m
+
+		log.Println("Process message successfull: ", item.String())
+	}
+}
+
+func (this *Store) Job(cfg *model.Config, mailer *mail.MailSender) {
 	for {
 		select {
-		case <-cron.Ticker.C:
-			size := Queue.Len()
-			if size == 0 {
-				continue
-			}
+		case <-this.Cron.Ticker.C:
+			this.flush(cfg, mailer)
 
-			for i := 0; i < size; i++ {
-				item := Queue.PopBack()
-
-				if item == nil {
-					continue
-				}
-
-				m := gomail.NewMessage()
-				m.SetHeader("From", config.Cfg.Auth.UserName)
-				m.SetHeader("To", item.Tos)
-				m.SetHeader("Subject", item.Subject)
-				m.SetBody("text/plain", item.Content)
-
-				mailer.Msg <- m
-
-				log.Println("Process message successfull: ", item.String())
-			}
-
-		case <-cron.Quit:
-			cron.Quit_Done <- struct{}{}
+		case <-this.Cron.Quit:
+			this.flush(cfg, mailer)
+			this.Cron.Quit_Done <- struct{}{}
 			return
 		}
 	}
 }
 
-func StartCron() {
-	go Job(Queue, QueueCron, mail.Mailer)
+func (this *Store) StartCron(cfg *model.Config, mailer *mail.MailSender) {
+	go this.Job(cfg, mailer)
 	log.Println("Job start successfull...")
 }
 
-func StopCron() {
-	QueueCron.Quit <- struct{}{}
-	<-QueueCron.Quit_Done
+func (this *Store) StopCron() {
+	this.Cron.Quit <- struct{}{}
+	<-this.Cron.Quit_Done
 
-	QueueCron.Destory()
 	log.Println("Job stop successfull...")
 }
