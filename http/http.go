@@ -29,10 +29,12 @@ func (this *HttpServer) mail(c *gin.Context) {
 	err := c.ShouldBind(msg)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 
 	if msg.Tos == "" || msg.Subject == "" || msg.Content == "" {
 		c.JSON(http.StatusOK, gin.H{"status": "tos,subject,content is empty,please check", "message": msg.String()})
+		return
 	}
 
 	this.queue.SafePush(msg)
