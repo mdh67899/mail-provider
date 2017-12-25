@@ -42,5 +42,7 @@ func main() {
 	service.Init(*cfg)
 	service.Start()
 
-	process_signal(os.Getpid(), service.Stop)
+	go process_signal(os.Getpid(), service.Stop)
+
+	select {}
 }
